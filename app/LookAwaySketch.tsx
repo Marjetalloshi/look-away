@@ -25,6 +25,16 @@ export default function LookAwaySketch() {
     return "explode";
   });
   const eyeShapeRef = useRef<string>("circle");
+  const motionSweepRef = useRef(0.5);
+  const crossStitchRef = useRef(false);
+  const crossStitchSizeRef = useRef(8);
+  const crossStitchThicknessRef = useRef(0.15);
+  const crossStitchGapRef = useRef(0.15);
+  const crossStitchStyleRef = useRef<string>("embroidery");
+  const crossStitchBgRef = useRef("#000000");
+  const [crossStitch, setCrossStitch] = useState(false);
+  const [crossStitchStyle, setCrossStitchStyle] = useState("embroidery");
+  const [crossStitchBg, setCrossStitchBg] = useState("#000000");
   const irisColorRef = useRef<string | null>(null);
   const scleraColorRef = useRef<string | null>(null);
   const [panelOpen, setPanelOpen] = useState(true);
@@ -235,6 +245,13 @@ export default function LookAwaySketch() {
         shakeModeRef.current = ss.shakeMode;
         eyeShapeRef.current = ss.eyeShape;
         lookAwayRef.current = ss.lookAway;
+        if (ss.motionSweep !== undefined) motionSweepRef.current = ss.motionSweep;
+        if (ss.crossStitch !== undefined) { crossStitchRef.current = ss.crossStitch; setCrossStitch(ss.crossStitch); }
+        if (ss.crossStitchSize !== undefined) crossStitchSizeRef.current = ss.crossStitchSize;
+        if (ss.crossStitchThickness !== undefined) crossStitchThicknessRef.current = ss.crossStitchThickness;
+        if (ss.crossStitchGap !== undefined) crossStitchGapRef.current = ss.crossStitchGap;
+        if (ss.crossStitchStyle !== undefined) { crossStitchStyleRef.current = ss.crossStitchStyle; setCrossStitchStyle(ss.crossStitchStyle); }
+        if (ss.crossStitchBg !== undefined) { crossStitchBgRef.current = ss.crossStitchBg; setCrossStitchBg(ss.crossStitchBg); }
 
         for (const se of savedState.eyes) {
           const body = Bodies.circle(se.x, se.y, se.radius * 1.05, {
@@ -274,38 +291,47 @@ export default function LookAwaySketch() {
           p.noStroke();
         };
 
-        // Draw circle eye
+        // Draw circle eye — uses native canvas API for globalAlpha compatibility
         function drawEye(
           x: number, y: number, radius: number,
           lookAngle: number, irisColor: string, scleraColor: string
         ) {
+          const ctx = (p as any).drawingContext as CanvasRenderingContext2D;
+
           // Sclera
-          p.fill(scleraColor);
-          p.noStroke();
-          p.ellipse(x, y, radius * 2, radius * 2);
+          ctx.fillStyle = scleraColor;
+          ctx.beginPath();
+          ctx.arc(x, y, radius, 0, Math.PI * 2);
+          ctx.fill();
 
           // Iris — offset toward look direction
           const irisRadius = radius * 0.53;
           const irisOffset = radius * 0.28;
           const ix = x + Math.cos(lookAngle) * irisOffset;
           const iy = y + Math.sin(lookAngle) * irisOffset;
-          p.fill(irisColor);
-          p.ellipse(ix, iy, irisRadius * 2, irisRadius * 2);
+          ctx.fillStyle = irisColor;
+          ctx.beginPath();
+          ctx.arc(ix, iy, irisRadius, 0, Math.PI * 2);
+          ctx.fill();
 
           // Pupil
           const pupilRadius = irisRadius * 0.61;
           const pupilOffset = irisOffset * 1.1;
           const px = x + Math.cos(lookAngle) * pupilOffset;
           const py = y + Math.sin(lookAngle) * pupilOffset;
-          p.fill(0);
-          p.ellipse(px, py, pupilRadius * 2, pupilRadius * 2);
+          ctx.fillStyle = "#000000";
+          ctx.beginPath();
+          ctx.arc(px, py, pupilRadius, 0, Math.PI * 2);
+          ctx.fill();
 
           // Highlight dot
           const hlRadius = Math.max(1.5, irisRadius * 0.12);
           const hlx = ix - Math.cos(lookAngle) * irisRadius * 0.3 + Math.cos(lookAngle + 1) * irisRadius * 0.15;
           const hly = iy - Math.sin(lookAngle) * irisRadius * 0.3 + Math.sin(lookAngle + 1) * irisRadius * 0.15;
-          p.fill(scleraColor);
-          p.ellipse(hlx, hly, hlRadius * 2, hlRadius * 2);
+          ctx.fillStyle = scleraColor;
+          ctx.beginPath();
+          ctx.arc(hlx, hly, hlRadius, 0, Math.PI * 2);
+          ctx.fill();
         }
 
         // Draw triangle eye — vertex 0 (apex) points toward lookAngle
@@ -455,11 +481,17 @@ export default function LookAwaySketch() {
 
           // Draw eyes — sort by size so small eyes draw on top
           const sorted = [...eyes].sort((a, b) => b.radius - a.radius);
+          const shape = eyeShapeRef.current;
+          const ctx = (p as any).drawingContext as CanvasRenderingContext2D;
+
           for (const eye of sorted) {
             const { body, radius, irisColor, scleraColor } = eye;
             if (!body || !body.position) continue;
             const x = body.position.x;
             const y = body.position.y;
+            const vx = body.velocity.x;
+            const vy = body.velocity.y;
+            const speed = Math.sqrt(vx * vx + vy * vy);
 
             // Look toward nearest center
             let ncx = centers[0].x, ncy = centers[0].y, nd = Infinity;
@@ -470,7 +502,29 @@ export default function LookAwaySketch() {
             const angle = Math.atan2(ncy - y, ncx - x);
             const lookAngle = isLookAway ? angle + Math.PI : angle;
 
-            const shape = eyeShapeRef.current;
+            // Motion sweep — ghost trails behind eyes
+            const sweep = motionSweepRef.current;
+            if (sweep > 0) {
+              const sweepCount = 2 + Math.round(sweep * 6);
+              const trailLen = sweep * 5;
+              for (let s = sweepCount; s >= 1; s--) {
+                const t = s / sweepCount;
+                const gx = x - vx * t * trailLen;
+                const gy = y - vy * t * trailLen;
+                ctx.save();
+                ctx.globalAlpha = sweep * 0.25 * (1 - t);
+                if (shape === "triangle") {
+                  drawTriangleEye(gx, gy, radius, lookAngle, irisColor, scleraColor);
+                } else if (shape === "rect") {
+                  drawRectEye(gx, gy, radius, lookAngle, irisColor);
+                } else {
+                  drawEye(gx, gy, radius, lookAngle, irisColor, scleraColor);
+                }
+                ctx.restore();
+              }
+            }
+
+            // Main eye
             if (shape === "triangle") {
               drawTriangleEye(x, y, radius, lookAngle, irisColor, scleraColor);
             } else if (shape === "rect") {
@@ -481,7 +535,6 @@ export default function LookAwaySketch() {
           }
 
           // Center logo — draw for each center
-          const ctx = (p as any).drawingContext as CanvasRenderingContext2D;
           ctx.fillStyle = "#ffffff";
           for (const c of centers) {
             ctx.save();
@@ -491,6 +544,91 @@ export default function LookAwaySketch() {
             for (const d of logoPaths) {
               const path = new Path2D(d);
               ctx.fill(path);
+            }
+            ctx.restore();
+          }
+
+          // Cross-stitch post-processing
+          if (crossStitchRef.current) {
+            const grid = crossStitchSizeRef.current;
+            const dpr = p.pixelDensity();
+            const cw = W * dpr;
+            const ch = H * dpr;
+            const imgData = ctx.getImageData(0, 0, cw, ch);
+            const pixels = imgData.data;
+            ctx.save();
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            ctx.fillStyle = crossStitchBgRef.current;
+            ctx.fillRect(0, 0, cw, ch);
+            const thickness = crossStitchThicknessRef.current;
+            const gap = crossStitchGapRef.current;
+            ctx.lineCap = "square";
+
+            const gridPx = grid * dpr;
+            for (let gy = 0; gy < ch; gy += gridPx) {
+              for (let gx = 0; gx < cw; gx += gridPx) {
+                const sx = Math.min(Math.floor(gx + gridPx / 2), cw - 1);
+                const sy = Math.min(Math.floor(gy + gridPx / 2), ch - 1);
+                const idx = (sy * cw + sx) * 4;
+                let r = pixels[idx];
+                let g = pixels[idx + 1];
+                let b = pixels[idx + 2];
+
+                if (r < 10 && g < 10 && b < 10) continue;
+
+                // Boost colors — saturate and max brightness
+                const max = Math.max(r, g, b);
+                const min = Math.min(r, g, b);
+                if (max > 0) {
+                  // First normalize to full brightness
+                  const boost = 255 / max;
+                  r = Math.round(r * boost);
+                  g = Math.round(g * boost);
+                  b = Math.round(b * boost);
+                  // Then increase saturation — push non-dominant channels down
+                  const avg = (r + g + b) / 3;
+                  const sat = 2.5; // saturation multiplier
+                  r = Math.min(255, Math.max(0, Math.round(avg + (r - avg) * sat)));
+                  g = Math.min(255, Math.max(0, Math.round(avg + (g - avg) * sat)));
+                  b = Math.min(255, Math.max(0, Math.round(avg + (b - avg) * sat)));
+                }
+
+                const pad = gridPx * gap;
+                const x1 = gx + pad;
+                const y1 = gy + pad;
+                const x2 = gx + gridPx - pad;
+                const y2 = gy + gridPx - pad;
+                const cx = gx + gridPx / 2;
+                const cy = gy + gridPx / 2;
+                const lw = Math.max(1, grid * dpr * thickness);
+                ctx.strokeStyle = `rgb(${r},${g},${b})`;
+                ctx.lineWidth = lw;
+
+                const stitchStyle = crossStitchStyleRef.current;
+                if (stitchStyle === "simple") {
+                  // Simple X — both diagonals in one stroke
+                  ctx.lineCap = "round";
+                  ctx.beginPath();
+                  ctx.moveTo(x1, y1);
+                  ctx.lineTo(x2, y2);
+                  ctx.moveTo(x2, y1);
+                  ctx.lineTo(x1, y2);
+                  ctx.stroke();
+                } else {
+                  // Embroidery — separate strokes + center dot
+                  ctx.lineCap = "square";
+                  ctx.beginPath();
+                  ctx.moveTo(x1, y1);
+                  ctx.lineTo(x2, y2);
+                  ctx.stroke();
+                  ctx.beginPath();
+                  ctx.moveTo(x2, y1);
+                  ctx.lineTo(x1, y2);
+                  ctx.stroke();
+                  ctx.fillStyle = `rgb(${r},${g},${b})`;
+                  ctx.fillRect(cx - lw * 0.3, cy - lw * 0.3, lw * 0.6, lw * 0.6);
+                }
+              }
             }
             ctx.restore();
           }
@@ -832,6 +970,13 @@ export default function LookAwaySketch() {
             shakeMode: shakeModeRef.current,
             eyeShape: eyeShapeRef.current,
             lookAway: lookAwayRef.current,
+            motionSweep: motionSweepRef.current,
+            crossStitch: crossStitchRef.current,
+            crossStitchSize: crossStitchSizeRef.current,
+            crossStitchThickness: crossStitchThicknessRef.current,
+            crossStitchGap: crossStitchGapRef.current,
+            crossStitchStyle: crossStitchStyleRef.current,
+            crossStitchBg: crossStitchBgRef.current,
           },
         };
         localStorage.setItem("lookaway-state", JSON.stringify(state));
@@ -1081,7 +1226,71 @@ export default function LookAwaySketch() {
             <input type="range" min={8} max={55} defaultValue={s.eyeSize}
               onChange={(e) => { eyeSizeRef.current = Number(e.target.value); }}
               style={sliderStyle} />
+            <span>motion</span>
+            <input type="range" min={0} max={100} defaultValue={Math.round(motionSweepRef.current * 100)}
+              onChange={(e) => { motionSweepRef.current = Number(e.target.value) / 100; }}
+              style={sliderStyle} />
           </div>
+
+          {/* Cross-stitch */}
+          <span style={{ fontSize: 11, opacity: 0.6, textTransform: "uppercase", letterSpacing: 1 }}>
+            cross-stitch
+          </span>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <button
+              onClick={() => {
+                const next = !crossStitch;
+                setCrossStitch(next);
+                crossStitchRef.current = next;
+              }}
+              style={{
+                ...btnStyle,
+                background: crossStitch ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.1)",
+                fontSize: 11,
+                padding: "5px 12px",
+              }}
+            >
+              {crossStitch ? "on" : "off"}
+            </button>
+          </div>
+          {crossStitch && (
+            <div style={{ display: "flex", gap: 6 }}>
+              {(["simple", "embroidery"] as const).map((st) => (
+                <button
+                  key={st}
+                  onClick={() => { setCrossStitchStyle(st); crossStitchStyleRef.current = st; }}
+                  style={{
+                    ...btnStyle,
+                    background: crossStitchStyle === st ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.1)",
+                    fontSize: 11,
+                    padding: "5px 12px",
+                  }}
+                >
+                  {st}
+                </button>
+              ))}
+            </div>
+          )}
+          {crossStitch && (
+            <div style={{ display: "grid", gridTemplateColumns: "70px 1fr", gap: "6px 8px", alignItems: "center" }}>
+              <span>size</span>
+              <input type="range" min={4} max={24} defaultValue={crossStitchSizeRef.current}
+                onChange={(e) => { crossStitchSizeRef.current = Number(e.target.value); }}
+                style={sliderStyle} />
+              <span>thickness</span>
+              <input type="range" min={5} max={50} defaultValue={Math.round(crossStitchThicknessRef.current * 100)}
+                onChange={(e) => { crossStitchThicknessRef.current = Number(e.target.value) / 100; }}
+                style={sliderStyle} />
+              <span>gap</span>
+              <input type="range" min={0} max={40} defaultValue={Math.round(crossStitchGapRef.current * 100)}
+                onChange={(e) => { crossStitchGapRef.current = Number(e.target.value) / 100; }}
+                style={sliderStyle} />
+              <span>bg color</span>
+              <input type="color" value={crossStitchBg}
+                onChange={(e) => { crossStitchBgRef.current = e.target.value; setCrossStitchBg(e.target.value); }}
+                style={{ width: "100%", height: 24, border: "none", borderRadius: 4, cursor: "pointer", background: "none" }} />
+            </div>
+          )}
 
           {/* Physics */}
           <span style={{ fontSize: 11, opacity: 0.6, textTransform: "uppercase", letterSpacing: 1 }}>
