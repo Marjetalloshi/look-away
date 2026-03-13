@@ -16,12 +16,27 @@ export default function LookAwaySketch() {
   const attractionRef = useRef(0.0006);
   const shakeIntensityRef = useRef(15);
   const shakeModeRef = useRef<string>("explode");
-  const [shakeMode, setShakeMode] = useState("explode");
+  const [shakeMode, setShakeMode] = useState(() => {
+    if (typeof window === "undefined") return "explode";
+    try {
+      const s = localStorage.getItem("lookaway-state");
+      if (s) return JSON.parse(s).settings?.shakeMode || "explode";
+    } catch {}
+    return "explode";
+  });
   const eyeShapeRef = useRef<string>("circle");
   const irisColorRef = useRef<string | null>(null);
   const scleraColorRef = useRef<string | null>(null);
   const [panelOpen, setPanelOpen] = useState(true);
-  const [activeStyle, setActiveStyle] = useState<string>("style1");
+  const [activeStyle, setActiveStyle] = useState<string>(() => {
+    if (typeof window === "undefined") return "style1";
+    try {
+      const s = localStorage.getItem("lookaway-state");
+      if (s) return JSON.parse(s).settings?.activeStyle || "style1";
+    } catch {}
+    return "style1";
+  });
+  const activeStyleRef = useRef<string>(activeStyle);
   const actionsRef = useRef<{
     shake: () => void;
     reset: () => void;
@@ -52,17 +67,47 @@ export default function LookAwaySketch() {
 
       const W = window.innerWidth;
       const H = window.innerHeight;
-      let centerX = W / 2;
-      let centerY = H / 2;
-      let isDraggingCenter = false;
+      interface CenterPoint {
+        x: number;
+        y: number;
+        body: Matter.Body;
+      }
 
-      // Invisible central shape
       const centralRadius = 50;
-      const centralBody = Bodies.circle(centerX, centerY, centralRadius, {
-        isStatic: true,
-        label: "center",
-      });
-      Composite.add(engine.world, centralBody);
+      const centers: CenterPoint[] = [];
+
+      function addCenter(x: number, y: number): CenterPoint {
+        const body = Bodies.circle(x, y, centralRadius, {
+          isStatic: true,
+          label: "center",
+        });
+        Composite.add(engine.world, body);
+        const c = { x, y, body };
+        centers.push(c);
+        return c;
+      }
+
+      // Restore or create initial center
+      const saved = localStorage.getItem("lookaway-state");
+      let savedState: {
+        eyes: { x: number; y: number; vx: number; vy: number; radius: number; irisColor: string; scleraColor: string }[];
+        centers: { x: number; y: number }[];
+        settings: {
+          activeStyle: string;
+          eyeSize: number; bounce: number; friction: number; airDrag: number;
+          density: number; attraction: number; shakeIntensity: number;
+          shakeMode: string; eyeShape: string; lookAway: boolean;
+        };
+      } | null = null;
+      try { if (saved) savedState = JSON.parse(saved); } catch {}
+
+      if (savedState && savedState.centers.length > 0) {
+        for (const c of savedState.centers) addCenter(c.x, c.y);
+      } else {
+        addCenter(W / 2, H / 2);
+      }
+
+      let draggingCenter: CenterPoint | null = null;
 
       // Walls (no restitution — eyes don't bounce off edges much)
       const wallOpts = { isStatic: true, label: "wall", restitution: 0.2 };
@@ -94,8 +139,9 @@ export default function LookAwaySketch() {
       function spawnEye(x: number, y: number) {
         const baseSize = eyeSizeRef.current;
         const radius = Math.max(8, Math.min(55, gaussRandom(baseSize, baseSize * 0.35)));
-        // Collision body is larger than visual for spacing
-        const body = Bodies.circle(x, y, radius * 1.05, {
+        // Collision body — tighter for rectangles
+        const collisionScale = eyeShapeRef.current === "rect" ? 0.45 : 1.05;
+        const body = Bodies.circle(x, y, radius * collisionScale, {
           restitution: bounceRef.current,
           friction: frictionRef.current,
           frictionAir: airDragRef.current,
@@ -109,8 +155,57 @@ export default function LookAwaySketch() {
         eyes.push({ body, radius, irisColor, scleraColor });
       }
 
-      // No initial eyes — user spawns them by clicking
-      const initialCount = 0;
+      function duplicateEye(source: EyeData, x: number, y: number) {
+        const body = Bodies.circle(x, y, source.radius * 1.05, {
+          restitution: bounceRef.current,
+          friction: frictionRef.current,
+          frictionAir: airDragRef.current,
+          density: densityRef.current * (source.radius / 20),
+          label: "eye",
+        });
+        Composite.add(engine.world, body);
+        eyes.push({ body, radius: source.radius, irisColor: source.irisColor, scleraColor: source.scleraColor });
+      }
+
+      function findEyeAt(mx: number, my: number): EyeData | null {
+        for (let i = eyes.length - 1; i >= 0; i--) {
+          const e = eyes[i];
+          if (!e.body || !e.body.position) continue;
+          const dx = mx - e.body.position.x;
+          const dy = my - e.body.position.y;
+          if (dx * dx + dy * dy <= e.radius * e.radius) return e;
+        }
+        return null;
+      }
+
+      // Restore saved eyes
+      if (savedState) {
+        // Restore settings
+        const ss = savedState.settings;
+        eyeSizeRef.current = ss.eyeSize;
+        bounceRef.current = ss.bounce;
+        frictionRef.current = ss.friction;
+        airDragRef.current = ss.airDrag;
+        densityRef.current = ss.density;
+        attractionRef.current = ss.attraction;
+        shakeIntensityRef.current = ss.shakeIntensity;
+        shakeModeRef.current = ss.shakeMode;
+        eyeShapeRef.current = ss.eyeShape;
+        lookAwayRef.current = ss.lookAway;
+
+        for (const se of savedState.eyes) {
+          const body = Bodies.circle(se.x, se.y, se.radius * 1.05, {
+            restitution: bounceRef.current,
+            friction: frictionRef.current,
+            frictionAir: airDragRef.current,
+            density: densityRef.current * (se.radius / 20),
+            label: "eye",
+          });
+          Body.setVelocity(body, { x: se.vx, y: se.vy });
+          Composite.add(engine.world, body);
+          eyes.push({ body, radius: se.radius, irisColor: se.irisColor, scleraColor: se.scleraColor });
+        }
+      }
 
       // --- p5.js sketch ---
       let isHolding = false;
@@ -212,37 +307,44 @@ export default function LookAwaySketch() {
         }
 
         // Draw split-ring eye — colored ring with two gap cuts + colored center dot
-        function drawSplitEye(
+        // Rectangle eye from SVG — colored outer rect, black inner rect, white highlight
+        // SVG: outer 214x191, inner 142x126 at (40, 53), highlight 25x23 at (142, 71)
+        function drawRectEye(
           x: number, y: number, radius: number,
           lookAngle: number, irisColor: string
         ) {
           const ctx = (p as any).drawingContext as CanvasRenderingContext2D;
 
-          const outerR = radius;
-          const innerR = radius * 0.55;
-          const dotR = radius * 0.3;
-          const gap = 0.22; // gap half-angle in radians
+          const outerW = radius * 2;
+          const outerH = outerW * (191.085 / 214.325); // keep SVG aspect ratio
 
+          ctx.save();
+          ctx.translate(x, y);
+          ctx.rotate(lookAngle - Math.PI / 2); // rotate so "top" of SVG points toward center
+
+          // Outer colored rect
           ctx.fillStyle = irisColor;
+          ctx.fillRect(-outerW / 2, -outerH / 2, outerW, outerH);
 
-          // Arc segment 1
-          ctx.beginPath();
-          ctx.arc(x, y, outerR, lookAngle + gap, lookAngle + Math.PI - gap);
-          ctx.arc(x, y, innerR, lookAngle + Math.PI - gap, lookAngle + gap, true);
-          ctx.closePath();
-          ctx.fill();
+          // Inner black rect — exact SVG position ratios
+          // SVG: inner starts at (39.8/214.3, 52.6/191.1) = (18.6%, 27.5%) from top-left
+          const innerW = outerW * (142.231 / 214.325);
+          const innerH = outerH * (126.428 / 191.085);
+          const innerX = -outerW / 2 + outerW * (39.806 / 214.325);
+          const innerY = -outerH / 2 + outerH * (52.592 / 191.085);
+          ctx.fillStyle = "#000000";
+          ctx.fillRect(innerX, innerY, innerW, innerH);
 
-          // Arc segment 2
-          ctx.beginPath();
-          ctx.arc(x, y, outerR, lookAngle + Math.PI + gap, lookAngle + 2 * Math.PI - gap);
-          ctx.arc(x, y, innerR, lookAngle + 2 * Math.PI - gap, lookAngle + Math.PI + gap, true);
-          ctx.closePath();
-          ctx.fill();
+          // White highlight — exact SVG position ratios
+          // SVG: highlight at (142.1/214.3, 71.1/191.1) from top-left
+          const hlW = outerW * (24.834 / 214.325);
+          const hlH = outerH * (22.576 / 191.085);
+          const hlX = -outerW / 2 + outerW * (142.121 / 214.325);
+          const hlY = -outerH / 2 + outerH * (71.058 / 191.085);
+          ctx.fillStyle = "#ffffff";
+          ctx.fillRect(hlX, hlY, hlW, hlH);
 
-          // Center dot — same color
-          ctx.beginPath();
-          ctx.arc(x, y, dotR, 0, Math.PI * 2);
-          ctx.fill();
+          ctx.restore();
         }
 
         p.draw = () => {
@@ -273,21 +375,25 @@ export default function LookAwaySketch() {
             wallsActive = true;
           }
 
-          // Apply attraction/repulsion — force scales with distance (closer = stronger)
+          // Apply attraction/repulsion toward nearest center
           for (const eye of eyes) {
             const b = eye.body;
             if (!b || !b.position) continue;
-            const dx = centerX - b.position.x;
-            const dy = centerY - b.position.y;
-            const dist = Math.sqrt(dx * dx + dy * dy);
-            if (dist > 1) {
-              // Gravity-like: force increases as distance decreases
-              const gravityScale = Math.min(3, 300 / (dist + 50));
+            // Find nearest center
+            let nearDx = 0, nearDy = 0, nearDist = Infinity;
+            for (const c of centers) {
+              const dx = c.x - b.position.x;
+              const dy = c.y - b.position.y;
+              const d = Math.sqrt(dx * dx + dy * dy);
+              if (d < nearDist) { nearDx = dx; nearDy = dy; nearDist = d; }
+            }
+            if (nearDist > 1) {
+              const gravityScale = Math.min(3, 300 / (nearDist + 50));
               const force = attractionStrength * b.mass * gravityScale;
               const dir = isLookAway ? -1 : 1;
               Body.applyForce(b, b.position, {
-                x: (dx / dist) * force * dir,
-                y: (dy / dist) * force * dir,
+                x: (nearDx / nearDist) * force * dir,
+                y: (nearDy / nearDist) * force * dir,
               });
             }
           }
@@ -300,34 +406,83 @@ export default function LookAwaySketch() {
             const x = body.position.x;
             const y = body.position.y;
 
-            const angle = Math.atan2(centerY - y, centerX - x);
+            // Look toward nearest center
+            let ncx = centers[0].x, ncy = centers[0].y, nd = Infinity;
+            for (const c of centers) {
+              const d = (c.x - x) * (c.x - x) + (c.y - y) * (c.y - y);
+              if (d < nd) { ncx = c.x; ncy = c.y; nd = d; }
+            }
+            const angle = Math.atan2(ncy - y, ncx - x);
             const lookAngle = isLookAway ? angle + Math.PI : angle;
 
             const shape = eyeShapeRef.current;
             if (shape === "triangle") {
               drawTriangleEye(x, y, radius, lookAngle, irisColor, scleraColor);
-            } else if (shape === "split") {
-              drawSplitEye(x, y, radius, lookAngle, irisColor);
+            } else if (shape === "rect") {
+              drawRectEye(x, y, radius, lookAngle, irisColor);
             } else {
               drawEye(x, y, radius, lookAngle, irisColor, scleraColor);
             }
           }
 
-          // Center text — drawn via native canvas to stay on top after ctx calls
+          // Center text — draw for each center
           const ctx = (p as any).drawingContext as CanvasRenderingContext2D;
           ctx.fillStyle = "#ffffff";
           ctx.font = "14px Helvetica, Arial, sans-serif";
           ctx.textAlign = "center";
           ctx.textBaseline = "middle";
-          ctx.fillText("look away.", centerX, centerY);
+          for (const c of centers) {
+            ctx.fillText("look away.", c.x, c.y);
+          }
         };
+
+        let isDuplicating = false;
+        let duplicateSource: EyeData | null = null;
+        let altDown = false;
+        let shiftDown = false;
+
+        window.addEventListener("keydown", (e) => {
+          if (e.key === "Alt") altDown = true;
+          if (e.key === "Shift") shiftDown = true;
+        });
+        window.addEventListener("keyup", (e) => {
+          if (e.key === "Alt") altDown = false;
+          if (e.key === "Shift") shiftDown = false;
+        });
 
         p.mousePressed = () => {
           const target = document.elementFromPoint(p.mouseX, p.mouseY);
           if (target && target.tagName === "CANVAS") {
-            const distToCenter = p.dist(p.mouseX, p.mouseY, centerX, centerY);
-            if (distToCenter < 60) {
-              isDraggingCenter = true;
+            // Check if clicking near any center
+            let clickedCenter: CenterPoint | null = null;
+            for (const c of centers) {
+              if (p.dist(p.mouseX, p.mouseY, c.x, c.y) < 60) {
+                clickedCenter = c;
+                break;
+              }
+            }
+
+            // Option+Shift+click to duplicate
+            if (altDown && shiftDown) {
+              // Duplicate center text
+              if (clickedCenter) {
+                const newC = addCenter(p.mouseX, p.mouseY);
+                isDuplicating = true;
+                draggingCenter = newC;
+                return;
+              }
+              // Duplicate eye
+              const hit = findEyeAt(p.mouseX, p.mouseY);
+              if (hit) {
+                isDuplicating = true;
+                duplicateSource = hit;
+                duplicateEye(hit, p.mouseX, p.mouseY);
+                return;
+              }
+            }
+
+            if (clickedCenter) {
+              draggingCenter = clickedCenter;
             } else {
               isHolding = true;
               spawnX = p.mouseX;
@@ -342,10 +497,17 @@ export default function LookAwaySketch() {
         };
 
         p.mouseDragged = () => {
-          if (isDraggingCenter) {
-            centerX = p.mouseX;
-            centerY = p.mouseY;
-            Body.setPosition(centralBody, { x: centerX, y: centerY });
+          if (isDuplicating && duplicateSource) {
+            // Move the last spawned (duplicated) eye to cursor
+            const last = eyes[eyes.length - 1];
+            if (last && last.body) {
+              Body.setPosition(last.body, { x: p.mouseX, y: p.mouseY });
+              Body.setVelocity(last.body, { x: 0, y: 0 });
+            }
+          } else if (draggingCenter) {
+            draggingCenter.x = p.mouseX;
+            draggingCenter.y = p.mouseY;
+            Body.setPosition(draggingCenter.body, { x: p.mouseX, y: p.mouseY });
           } else {
             spawnX = p.mouseX;
             spawnY = p.mouseY;
@@ -354,7 +516,9 @@ export default function LookAwaySketch() {
 
         p.mouseReleased = () => {
           isHolding = false;
-          isDraggingCenter = false;
+          draggingCenter = null;
+          isDuplicating = false;
+          duplicateSource = null;
         };
 
         p.windowResized = () => {
@@ -380,8 +544,14 @@ export default function LookAwaySketch() {
         for (const eye of eyes) {
           const b = eye.body;
           if (!b || !b.position) continue;
-          const dx = b.position.x - centerX;
-          const dy = b.position.y - centerY;
+          // Find nearest center for this eye
+          let cx = centers[0].x, cy = centers[0].y, cd = Infinity;
+          for (const c of centers) {
+            const d = (c.x - b.position.x) ** 2 + (c.y - b.position.y) ** 2;
+            if (d < cd) { cx = c.x; cy = c.y; cd = d; }
+          }
+          const dx = b.position.x - cx;
+          const dy = b.position.y - cy;
           const dist = Math.sqrt(dx * dx + dy * dy);
           if (dist < 1) continue;
           const ndx = dx / dist;
@@ -418,20 +588,11 @@ export default function LookAwaySketch() {
         }, 800);
       };
 
+      let isResetting = false;
       actionsRef.current.reset = () => {
-        for (const eye of eyes) {
-          Composite.remove(engine.world, eye.body);
-        }
-        eyes.length = 0;
-        centerX = W / 2;
-        centerY = H / 2;
-        Body.setPosition(centralBody, { x: centerX, y: centerY });
-        for (let i = 0; i < initialCount; i++) {
-          const angle = Math.random() * Math.PI * 2;
-          const dist = 80 + Math.random() * Math.min(W, H) * 0.4;
-          spawnEye(centerX + Math.cos(angle) * dist, centerY + Math.sin(angle) * dist);
-        }
-        lookAwayRef.current = false;
+        isResetting = true;
+        localStorage.removeItem("lookaway-state");
+        window.location.reload();
       };
 
       actionsRef.current.updatePhysics = () => {
@@ -443,7 +604,40 @@ export default function LookAwaySketch() {
         }
       };
 
+      // Save state before page unload
+      const saveState = () => {
+        if (isResetting) return;
+        const state = {
+          eyes: eyes.map(e => ({
+            x: e.body.position.x,
+            y: e.body.position.y,
+            vx: e.body.velocity.x,
+            vy: e.body.velocity.y,
+            radius: e.radius,
+            irisColor: e.irisColor,
+            scleraColor: e.scleraColor,
+          })),
+          centers: centers.map(c => ({ x: c.x, y: c.y })),
+          settings: {
+            activeStyle: activeStyleRef.current,
+            eyeSize: eyeSizeRef.current,
+            bounce: bounceRef.current,
+            friction: frictionRef.current,
+            airDrag: airDragRef.current,
+            density: densityRef.current,
+            attraction: attractionRef.current,
+            shakeIntensity: shakeIntensityRef.current,
+            shakeMode: shakeModeRef.current,
+            eyeShape: eyeShapeRef.current,
+            lookAway: lookAwayRef.current,
+          },
+        };
+        localStorage.setItem("lookaway-state", JSON.stringify(state));
+      };
+      window.addEventListener("beforeunload", saveState);
+
       cleanup = () => {
+        window.removeEventListener("beforeunload", saveState);
         Runner.stop(runner);
         Engine.clear(engine);
         p5Instance.remove();
@@ -499,8 +693,8 @@ export default function LookAwaySketch() {
     },
     style3: {
       label: "style 3",
-      description: "split-ring eyes",
-      eyeShape: "split",
+      description: "rectangle eyes",
+      eyeShape: "rect",
       eyeSize: 38,
       bounce: 0.2,
       friction: 0.1,
@@ -525,6 +719,7 @@ export default function LookAwaySketch() {
     shakeModeRef.current = s.shakeMode;
     setShakeMode(s.shakeMode);
     setActiveStyle(key);
+    activeStyleRef.current = key;
     actionsRef.current.updatePhysics();
   }
 
@@ -653,7 +848,7 @@ export default function LookAwaySketch() {
           >
             look away
           </button>
-          <button onClick={() => window.location.reload()} style={btnStyle}>
+          <button onClick={() => actionsRef.current.reset()} style={btnStyle}>
             reset
           </button>
         </div>
