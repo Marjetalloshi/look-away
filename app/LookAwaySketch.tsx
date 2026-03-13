@@ -41,7 +41,8 @@ export default function LookAwaySketch() {
     shake: () => void;
     reset: () => void;
     updatePhysics: () => void;
-  }>({ shake: () => {}, reset: () => {}, updatePhysics: () => {} });
+    exportSVG: () => void;
+  }>({ shake: () => {}, reset: () => {}, updatePhysics: () => {}, exportSVG: () => {} });
 
   useEffect(() => {
     let cleanup: (() => void) | undefined;
@@ -70,28 +71,70 @@ export default function LookAwaySketch() {
       interface CenterPoint {
         x: number;
         y: number;
-        body: Matter.Body;
+        scale: number;
+        bodies: Matter.Body[];
       }
 
-      const centralRadius = 50;
+      const logoW = 235;
+      const logoH = 162;
+      const logoPad = 15; // padding around each letter block
       const centers: CenterPoint[] = [];
 
-      function addCenter(x: number, y: number): CenterPoint {
-        const body = Bodies.circle(x, y, centralRadius, {
-          isStatic: true,
-          label: "center",
+      // Bounding boxes for each letter (from SVG path coordinates)
+      const letterBoxes = [
+        { x: 0,   y: 0,   w: 50,  h: 78.5 },  // L
+        { x: 54,  y: 22.8, w: 51,  h: 55.7 },  // o
+        { x: 109, y: 22.8, w: 50,  h: 55.7 },  // o
+        { x: 163, y: 0,   w: 53,  h: 75.7 },  // k
+        { x: 0,   y: 79.8, w: 50,  h: 55.7 },  // a
+        { x: 54,  y: 82.6, w: 72,  h: 53.1 },  // w
+        { x: 130, y: 79.8, w: 50,  h: 55.7 },  // a
+        { x: 184, y: 82.6, w: 51,  h: 78.5 },  // y.
+      ];
+
+      function makeCenterBodies(x: number, y: number, scale: number): Matter.Body[] {
+        const ox = x - (logoW / 2) * scale;
+        const oy = y - (logoH / 2) * scale;
+        return letterBoxes.map(lb => {
+          const bx = ox + (lb.x + lb.w / 2) * scale;
+          const by = oy + (lb.y + lb.h / 2) * scale;
+          const bw = (lb.w + logoPad * 2) * scale;
+          const bh = (lb.h + logoPad * 2) * scale;
+          return Bodies.rectangle(bx, by, bw, bh, {
+            isStatic: true,
+            label: "center",
+          });
         });
-        Composite.add(engine.world, body);
-        const c = { x, y, body };
+      }
+
+      function addCenter(x: number, y: number, scale = 1): CenterPoint {
+        const bodies = makeCenterBodies(x, y, scale);
+        Composite.add(engine.world, bodies);
+        const c = { x, y, scale, bodies };
         centers.push(c);
         return c;
+      }
+
+      function rescaleCenter(c: CenterPoint, newScale: number) {
+        c.scale = Math.max(0.3, Math.min(4, newScale));
+        for (const b of c.bodies) Composite.remove(engine.world, b);
+        c.bodies = makeCenterBodies(c.x, c.y, c.scale);
+        Composite.add(engine.world, c.bodies);
+      }
+
+      function repositionCenter(c: CenterPoint, nx: number, ny: number) {
+        c.x = nx;
+        c.y = ny;
+        for (const b of c.bodies) Composite.remove(engine.world, b);
+        c.bodies = makeCenterBodies(nx, ny, c.scale);
+        Composite.add(engine.world, c.bodies);
       }
 
       // Restore or create initial center
       const saved = localStorage.getItem("lookaway-state");
       let savedState: {
         eyes: { x: number; y: number; vx: number; vy: number; radius: number; irisColor: string; scleraColor: string }[];
-        centers: { x: number; y: number }[];
+        centers: { x: number; y: number; scale?: number }[];
         settings: {
           activeStyle: string;
           eyeSize: number; bounce: number; friction: number; airDrag: number;
@@ -102,7 +145,7 @@ export default function LookAwaySketch() {
       try { if (saved) savedState = JSON.parse(saved); } catch {}
 
       if (savedState && savedState.centers.length > 0) {
-        for (const c of savedState.centers) addCenter(c.x, c.y);
+        for (const c of savedState.centers) addCenter(c.x, c.y, c.scale ?? 1);
       } else {
         addCenter(W / 2, H / 2);
       }
@@ -206,6 +249,18 @@ export default function LookAwaySketch() {
           eyes.push({ body, radius: se.radius, irisColor: se.irisColor, scleraColor: se.scleraColor });
         }
       }
+
+      // "look away." logo SVG paths (235x162)
+      const logoPaths = [
+        "M50.1152 75.7059H25.5907V55.4466H50.1152V75.7059ZM24.5244 78.4782L0 64.2967V51.1814H17.487L24.5244 55.1267V78.4782ZM20.2593 50.1152H0V25.5907H20.2593V50.1152ZM20.2593 24.5244H0V0H20.2593V24.5244Z",
+        "M78.9547 46.1699L71.9173 50.1152H54.4303V36.9999L78.9547 22.8184V46.1699ZM104.545 50.1152H87.0584L80.021 46.1699V22.8184L104.545 36.9999V50.1152ZM78.9547 78.4782L54.4303 64.2967V51.1814H71.9173L78.9547 55.1267V78.4782ZM104.545 64.2967L80.021 78.4782V55.1267L87.0584 51.1814H104.545V64.2967Z",
+        "M133.385 46.1699L126.348 50.1152H108.861V36.9999L133.385 22.8184V46.1699ZM158.976 50.1152H141.489L134.451 46.1699V22.8184L158.976 36.9999V50.1152ZM133.385 78.4782L108.861 64.2967V51.1814H126.348L133.385 55.1267V78.4782ZM158.976 64.2967L134.451 78.4782V55.1267L141.489 51.1814H158.976V64.2967Z",
+        "M183.55 50.1152H163.291V25.5907H183.55V50.1152ZM183.55 24.5244H163.291V0H183.55V24.5244ZM187.815 71.7606L180.778 75.7059H163.291V62.5906L187.815 48.4091V71.7606ZM213.406 46.1699L206.368 50.1152H188.881V36.9999L213.406 22.8184V46.1699ZM216.178 75.7059H192.827L188.881 68.6684V51.1814H201.997L216.178 75.7059Z",
+        "M24.5244 103.17L17.487 107.115H0V93.9999L24.5244 79.8184V103.17ZM24.5244 135.478L0 121.297V108.181H17.487L24.5244 112.127V135.478ZM50.1152 107.115H32.6282L25.5907 103.17V79.8184L50.1152 93.9999V107.115ZM50.1152 135.478L25.5907 121.297V108.181H43.0777L50.1152 112.127V135.478Z",
+        "M125.871 121.297L101.347 135.478V112.127L108.384 108.181H125.871V121.297ZM74.6896 107.115H54.4303V82.5907H74.6896V107.115ZM125.871 107.115H105.612V82.5907H125.871V107.115ZM100.28 121.297L75.7559 135.478V112.127L82.7933 108.181H100.28V121.297ZM100.28 107.115H80.021V82.5907H100.28V107.115ZM74.6896 132.706H54.4303V108.181H74.6896V132.706Z",
+        "M154.627 103.17L147.59 107.115H130.103V93.9999L154.627 79.8184V103.17ZM154.627 135.478L130.103 121.297V108.181H147.59L154.627 112.127V135.478ZM180.218 107.115H162.731L155.694 103.17V79.8184L180.218 93.9999V107.115ZM180.218 135.478L155.694 121.297V108.181H173.181L180.218 112.127V135.478Z",
+        "M209.058 135.478L184.533 121.297V108.181H202.02L209.058 112.127V135.478ZM234.648 121.297L210.124 135.478V112.127L217.161 108.181H234.648V121.297ZM209.058 161.069L184.533 146.887V133.772H202.02L209.058 137.717V161.069ZM234.648 146.887L210.124 161.069V137.717L217.161 133.772H234.648V146.887ZM204.792 107.115H184.533V82.5907H204.792V107.115ZM234.648 107.115H214.389V82.5907H234.648V107.115Z",
+      ];
 
       // --- p5.js sketch ---
       let isHolding = false;
@@ -425,14 +480,19 @@ export default function LookAwaySketch() {
             }
           }
 
-          // Center text — draw for each center
+          // Center logo — draw for each center
           const ctx = (p as any).drawingContext as CanvasRenderingContext2D;
           ctx.fillStyle = "#ffffff";
-          ctx.font = "14px Helvetica, Arial, sans-serif";
-          ctx.textAlign = "center";
-          ctx.textBaseline = "middle";
           for (const c of centers) {
-            ctx.fillText("look away.", c.x, c.y);
+            ctx.save();
+            ctx.translate(c.x, c.y);
+            ctx.scale(c.scale, c.scale);
+            ctx.translate(-logoW / 2, -logoH / 2);
+            for (const d of logoPaths) {
+              const path = new Path2D(d);
+              ctx.fill(path);
+            }
+            ctx.restore();
           }
         };
 
@@ -449,6 +509,19 @@ export default function LookAwaySketch() {
           if (e.key === "Alt") altDown = false;
           if (e.key === "Shift") shiftDown = false;
         });
+
+        p.doubleClicked = () => {
+          // Double-click on a center to delete it (keep at least one)
+          if (centers.length > 1) {
+            for (let i = 0; i < centers.length; i++) {
+              if (p.dist(p.mouseX, p.mouseY, centers[i].x, centers[i].y) < 60) {
+                for (const b of centers[i].bodies) Composite.remove(engine.world, b);
+                centers.splice(i, 1);
+                return;
+              }
+            }
+          }
+        };
 
         p.mousePressed = () => {
           const target = document.elementFromPoint(p.mouseX, p.mouseY);
@@ -505,9 +578,7 @@ export default function LookAwaySketch() {
               Body.setVelocity(last.body, { x: 0, y: 0 });
             }
           } else if (draggingCenter) {
-            draggingCenter.x = p.mouseX;
-            draggingCenter.y = p.mouseY;
-            Body.setPosition(draggingCenter.body, { x: p.mouseX, y: p.mouseY });
+            repositionCenter(draggingCenter, p.mouseX, p.mouseY);
           } else {
             spawnX = p.mouseX;
             spawnY = p.mouseY;
@@ -527,6 +598,23 @@ export default function LookAwaySketch() {
       };
 
       const p5Instance = new p5(sketch);
+
+      // Scroll to scale a center point
+      const onWheel = (e: WheelEvent) => {
+        for (const c of centers) {
+          const dx = e.clientX - c.x;
+          const dy = e.clientY - c.y;
+          const hw = (logoW / 2 + logoPad) * c.scale;
+          const hh = (logoH / 2 + logoPad) * c.scale;
+          if (Math.abs(dx) < hw && Math.abs(dy) < hh) {
+            e.preventDefault();
+            const delta = e.deltaY > 0 ? -0.08 : 0.08;
+            rescaleCenter(c, c.scale + delta);
+            break;
+          }
+        }
+      };
+      window.addEventListener("wheel", onWheel, { passive: false });
 
       // --- Actions ---
       actionsRef.current.shake = () => {
@@ -604,6 +692,120 @@ export default function LookAwaySketch() {
         }
       };
 
+      actionsRef.current.exportSVG = () => {
+        const svgParts: string[] = [];
+        svgParts.push(`<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`);
+        svgParts.push(`<rect width="${W}" height="${H}" fill="#000000"/>`);
+
+        const isLookAway = lookAwayRef.current;
+        const shape = eyeShapeRef.current;
+        const sorted = [...eyes].sort((a, b) => b.radius - a.radius);
+
+        for (const eye of sorted) {
+          const { body, radius, irisColor, scleraColor } = eye;
+          if (!body || !body.position) continue;
+          const x = body.position.x;
+          const y = body.position.y;
+
+          let ncx = centers[0].x, ncy = centers[0].y, nd = Infinity;
+          for (const c of centers) {
+            const d = (c.x - x) * (c.x - x) + (c.y - y) * (c.y - y);
+            if (d < nd) { ncx = c.x; ncy = c.y; nd = d; }
+          }
+          const angle = Math.atan2(ncy - y, ncx - x);
+          const lookAngle = isLookAway ? angle + Math.PI : angle;
+
+          if (shape === "circle") {
+            // Sclera
+            svgParts.push(`<circle cx="${x}" cy="${y}" r="${radius}" fill="${scleraColor}"/>`);
+            // Iris
+            const irisRadius = radius * 0.53;
+            const irisOffset = radius * 0.28;
+            const ix = x + Math.cos(lookAngle) * irisOffset;
+            const iy = y + Math.sin(lookAngle) * irisOffset;
+            svgParts.push(`<circle cx="${ix}" cy="${iy}" r="${irisRadius}" fill="${irisColor}"/>`);
+            // Pupil
+            const pupilRadius = irisRadius * 0.61;
+            const pupilOffset = irisOffset * 1.1;
+            const px = x + Math.cos(lookAngle) * pupilOffset;
+            const py = y + Math.sin(lookAngle) * pupilOffset;
+            svgParts.push(`<circle cx="${px}" cy="${py}" r="${pupilRadius}" fill="#000000"/>`);
+            // Highlight
+            const hlRadius = Math.max(1.5, irisRadius * 0.12);
+            const hlx = ix - Math.cos(lookAngle) * irisRadius * 0.3 + Math.cos(lookAngle + 1) * irisRadius * 0.15;
+            const hly = iy - Math.sin(lookAngle) * irisRadius * 0.3 + Math.sin(lookAngle + 1) * irisRadius * 0.15;
+            svgParts.push(`<circle cx="${hlx}" cy="${hly}" r="${hlRadius}" fill="${scleraColor}"/>`);
+
+          } else if (shape === "triangle") {
+            function triPoints(cx: number, cy: number, r: number, a: number): string {
+              const pts: string[] = [];
+              for (let i = 0; i < 3; i++) {
+                const va = a + (i * 2 * Math.PI) / 3;
+                pts.push(`${cx + Math.cos(va) * r},${cy + Math.sin(va) * r}`);
+              }
+              return pts.join(" ");
+            }
+            // Sclera
+            svgParts.push(`<polygon points="${triPoints(x, y, radius, lookAngle)}" fill="${scleraColor}"/>`);
+            // Iris
+            const irisShift = radius * 0.3;
+            const ix = x + Math.cos(lookAngle) * irisShift;
+            const iy = y + Math.sin(lookAngle) * irisShift;
+            svgParts.push(`<polygon points="${triPoints(ix, iy, radius * 0.55, lookAngle)}" fill="${irisColor}"/>`);
+            // Pupil
+            const pupilShift = radius * 0.38;
+            const px = x + Math.cos(lookAngle) * pupilShift;
+            const py = y + Math.sin(lookAngle) * pupilShift;
+            svgParts.push(`<polygon points="${triPoints(px, py, radius * 0.35, lookAngle)}" fill="#000000"/>`);
+            // Highlight
+            const hlR = radius * 0.08;
+            const hlx = px + Math.cos(lookAngle + 2.5) * radius * 0.35 * 0.3;
+            const hly = py + Math.sin(lookAngle + 2.5) * radius * 0.35 * 0.3;
+            svgParts.push(`<polygon points="${triPoints(hlx, hly, hlR, lookAngle)}" fill="${scleraColor}"/>`);
+
+          } else if (shape === "rect") {
+            const outerW = radius * 2;
+            const outerH = outerW * (191.085 / 214.325);
+            const rotDeg = (lookAngle - Math.PI / 2) * (180 / Math.PI);
+            svgParts.push(`<g transform="translate(${x},${y}) rotate(${rotDeg})">`);
+            // Outer colored rect
+            svgParts.push(`<rect x="${-outerW / 2}" y="${-outerH / 2}" width="${outerW}" height="${outerH}" fill="${irisColor}"/>`);
+            // Inner black rect
+            const innerW = outerW * (142.231 / 214.325);
+            const innerH = outerH * (126.428 / 191.085);
+            const innerX = -outerW / 2 + outerW * (39.806 / 214.325);
+            const innerY = -outerH / 2 + outerH * (52.592 / 191.085);
+            svgParts.push(`<rect x="${innerX}" y="${innerY}" width="${innerW}" height="${innerH}" fill="#000000"/>`);
+            // White highlight
+            const hlW = outerW * (24.834 / 214.325);
+            const hlH = outerH * (22.576 / 191.085);
+            const hlX = -outerW / 2 + outerW * (142.121 / 214.325);
+            const hlY = -outerH / 2 + outerH * (71.058 / 191.085);
+            svgParts.push(`<rect x="${hlX}" y="${hlY}" width="${hlW}" height="${hlH}" fill="#ffffff"/>`);
+            svgParts.push(`</g>`);
+          }
+        }
+
+        // Center logo
+        for (const c of centers) {
+          svgParts.push(`<g transform="translate(${c.x},${c.y}) scale(${c.scale}) translate(${-logoW / 2},${-logoH / 2})">`);
+          for (const d of logoPaths) {
+            svgParts.push(`<path d="${d}" fill="#ffffff"/>`);
+          }
+          svgParts.push(`</g>`);
+        }
+
+        svgParts.push(`</svg>`);
+        const svgContent = svgParts.join("\n");
+        const blob = new Blob([svgContent], { type: "image/svg+xml" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "look-away.svg";
+        a.click();
+        URL.revokeObjectURL(url);
+      };
+
       // Save state before page unload
       const saveState = () => {
         if (isResetting) return;
@@ -617,7 +819,7 @@ export default function LookAwaySketch() {
             irisColor: e.irisColor,
             scleraColor: e.scleraColor,
           })),
-          centers: centers.map(c => ({ x: c.x, y: c.y })),
+          centers: centers.map(c => ({ x: c.x, y: c.y, scale: c.scale })),
           settings: {
             activeStyle: activeStyleRef.current,
             eyeSize: eyeSizeRef.current,
@@ -638,6 +840,7 @@ export default function LookAwaySketch() {
 
       cleanup = () => {
         window.removeEventListener("beforeunload", saveState);
+        window.removeEventListener("wheel", onWheel);
         Runner.stop(runner);
         Engine.clear(engine);
         p5Instance.remove();
@@ -850,6 +1053,9 @@ export default function LookAwaySketch() {
           </button>
           <button onClick={() => actionsRef.current.reset()} style={btnStyle}>
             reset
+          </button>
+          <button onClick={() => actionsRef.current.exportSVG?.()} style={btnStyle}>
+            save svg
           </button>
         </div>
 
