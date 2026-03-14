@@ -106,7 +106,7 @@ export default function LookAwaySketch() {
 
       const logoW = 48;
       const logoH = 20;
-      const logoPad = 3; // padding around each letter block
+      const logoPad = 6; // padding around each letter block
       const centers: CenterPoint[] = [];
 
       // Collision boxes matching actual SVG filled areas
@@ -176,7 +176,7 @@ export default function LookAwaySketch() {
       if (savedState && savedState.centers.length > 0) {
         for (const c of savedState.centers) addCenter(c.x, c.y, c.scale ?? 1);
       } else {
-        addCenter(W / 2, H / 2);
+        addCenter(W / 2, H / 2, 5);
       }
 
       let draggingCenter: CenterPoint | null = null;
@@ -208,7 +208,7 @@ export default function LookAwaySketch() {
         return mean + z * stddev;
       }
 
-      // Audio context for spawn sounds
+      // Audio
       let audioCtx: AudioContext | null = null;
       let lastSoundTime = 0;
       function playSpawnSound(radius: number) {
@@ -233,7 +233,7 @@ export default function LookAwaySketch() {
 
       function spawnEye(x: number, y: number) {
         const baseSize = eyeSizeRef.current;
-        const radius = Math.max(8, Math.min(55, gaussRandom(baseSize, baseSize * 0.35)));
+        const radius = Math.max(8, Math.min(55, gaussRandom(baseSize, baseSize * 0.15)));
         // Collision body — tighter for rectangles
         const collisionScale = eyeShapeRef.current === "rect" ? 0.45 : 1.05;
         const body = Bodies.circle(x, y, radius * collisionScale, {
@@ -555,8 +555,8 @@ export default function LookAwaySketch() {
             // Motion sweep — ghost trails behind eyes (only when moving)
             const sweep = motionSweepRef.current;
             if (sweep > 0 && speed > 0.25) { // speed is squared, 0.25 = 0.5^2
-              const sweepCount = 3 + Math.round(sweep * 8);
-              const trailLen = sweep * 30;
+              const sweepCount = 3 + Math.round(sweep * 5);
+              const trailLen = sweep * 18;
               for (let s = sweepCount; s >= 1; s--) {
                 const t = s / sweepCount;
                 const gx = x - vx * t * trailLen;
@@ -698,7 +698,10 @@ export default function LookAwaySketch() {
           // Double-click on a center to delete it (keep at least one)
           if (centers.length > 1) {
             for (let i = 0; i < centers.length; i++) {
-              if (p.dist(mx(), my(), centers[i].x, centers[i].y) < 60) {
+              const c = centers[i];
+              const hw = (logoW / 2 + logoPad) * c.scale;
+              const hh = (logoH / 2 + logoPad) * c.scale;
+              if (Math.abs(mx() - c.x) < hw && Math.abs(my() - c.y) < hh) {
                 for (const b of centers[i].bodies) Composite.remove(engine.world, b);
                 centers.splice(i, 1);
                 return;
@@ -710,10 +713,12 @@ export default function LookAwaySketch() {
         p.mousePressed = () => {
           const target = document.elementFromPoint(p.mouseX, p.mouseY);
           if (target && target.tagName === "CANVAS") {
-            // Check if clicking near any center
+            // Check if clicking inside any center logo area
             let clickedCenter: CenterPoint | null = null;
             for (const c of centers) {
-              if (p.dist(mx(), my(), c.x, c.y) < 60) {
+              const hw = (logoW / 2 + logoPad) * c.scale;
+              const hh = (logoH / 2 + logoPad) * c.scale;
+              if (Math.abs(mx() - c.x) < hw && Math.abs(my() - c.y) < hh) {
                 clickedCenter = c;
                 break;
               }
@@ -863,7 +868,33 @@ export default function LookAwaySketch() {
       let isResetting = false;
       actionsRef.current.reset = () => {
         isResetting = true;
-        localStorage.removeItem("lookaway-state");
+        // Preserve current settings, just clear eyes/centers
+        const state = {
+          eyes: [],
+          centers: [],
+          settings: {
+            activeStyle: activeStyleRef.current,
+            eyeSize: eyeSizeRef.current,
+            bounce: bounceRef.current,
+            friction: frictionRef.current,
+            airDrag: airDragRef.current,
+            density: densityRef.current,
+            attraction: attractionRef.current,
+            shakeIntensity: shakeIntensityRef.current,
+            shakeMode: shakeModeRef.current,
+            eyeShape: eyeShapeRef.current,
+            lookAway: lookAwayRef.current,
+            motionSweep: motionSweepRef.current,
+            crossStitch: crossStitchRef.current,
+            crossStitchSize: crossStitchSizeRef.current,
+            crossStitchThickness: crossStitchThicknessRef.current,
+            crossStitchGap: crossStitchGapRef.current,
+            crossStitchStyle: crossStitchStyleRef.current,
+            crossStitchBg: crossStitchBgRef.current,
+            posterSize: posterSizeRef.current,
+          },
+        };
+        localStorage.setItem("lookaway-state", JSON.stringify(state));
         window.location.reload();
       };
 
@@ -1200,18 +1231,8 @@ export default function LookAwaySketch() {
   function applyStyle(key: string) {
     const s = STYLES[key];
     eyeShapeRef.current = s.eyeShape;
-    eyeSizeRef.current = s.eyeSize;
-    bounceRef.current = s.bounce;
-    frictionRef.current = s.friction;
-    airDragRef.current = s.airDrag;
-    densityRef.current = s.density;
-    attractionRef.current = s.attraction;
-    shakeIntensityRef.current = s.shakeIntensity;
-    shakeModeRef.current = s.shakeMode;
-    setShakeMode(s.shakeMode);
     setActiveStyle(key);
     activeStyleRef.current = key;
-    actionsRef.current.updatePhysics();
   }
 
   const btnStyle: React.CSSProperties = {
@@ -1322,7 +1343,6 @@ export default function LookAwaySketch() {
 
         {/* Settings panel */}
         <div
-          key={activeStyle}
           style={{
             background: "rgba(0,0,0,0.6)",
             padding: "8px 10px",
@@ -1338,7 +1358,7 @@ export default function LookAwaySketch() {
           <span style={{ fontSize: 9, opacity: 0.5, textTransform: "uppercase", letterSpacing: 1 }}>eyes</span>
           <div style={{ display: "grid", gridTemplateColumns: "50px 1fr", gap: "3px 6px", alignItems: "center" }}>
             <span>size</span>
-            <input type="range" min={8} max={55} defaultValue={s.eyeSize}
+            <input type="range" min={8} max={55} defaultValue={eyeSizeRef.current}
               onChange={(e) => { eyeSizeRef.current = Number(e.target.value); }}
               style={sliderStyle} />
             <span>motion</span>
@@ -1381,19 +1401,19 @@ export default function LookAwaySketch() {
           <span style={{ fontSize: 9, opacity: 0.5, textTransform: "uppercase", letterSpacing: 1 }}>physics</span>
           <div style={{ display: "grid", gridTemplateColumns: "50px 1fr", gap: "3px 6px", alignItems: "center" }}>
             <span>bounce</span>
-            <input type="range" min={0} max={100} defaultValue={Math.round(s.bounce * 100)}
+            <input type="range" min={0} max={100} defaultValue={Math.round(bounceRef.current * 100)}
               onChange={(e) => { bounceRef.current = Number(e.target.value) / 100; actionsRef.current.updatePhysics(); }} style={sliderStyle} />
             <span>friction</span>
-            <input type="range" min={0} max={100} defaultValue={Math.round(s.friction * 100)}
+            <input type="range" min={0} max={100} defaultValue={Math.round(frictionRef.current * 100)}
               onChange={(e) => { frictionRef.current = Number(e.target.value) / 100; actionsRef.current.updatePhysics(); }} style={sliderStyle} />
             <span>drag</span>
-            <input type="range" min={0} max={100} defaultValue={Math.round(s.airDrag * 1000)}
+            <input type="range" min={0} max={100} defaultValue={Math.round(airDragRef.current * 1000)}
               onChange={(e) => { airDragRef.current = Number(e.target.value) / 1000; actionsRef.current.updatePhysics(); }} style={sliderStyle} />
             <span>density</span>
-            <input type="range" min={1} max={100} defaultValue={Math.round(s.density * 10000)}
+            <input type="range" min={1} max={100} defaultValue={Math.round(densityRef.current * 10000)}
               onChange={(e) => { densityRef.current = Number(e.target.value) / 10000; actionsRef.current.updatePhysics(); }} style={sliderStyle} />
             <span>attract</span>
-            <input type="range" min={1} max={100} defaultValue={Math.round(s.attraction * 100000)}
+            <input type="range" min={1} max={100} defaultValue={Math.round(attractionRef.current * 100000)}
               onChange={(e) => { attractionRef.current = Number(e.target.value) / 100000; }} style={sliderStyle} />
           </div>
 
@@ -1408,7 +1428,7 @@ export default function LookAwaySketch() {
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "50px 1fr", gap: "3px 6px", alignItems: "center" }}>
             <span>intensity</span>
-            <input type="range" min={0} max={30} defaultValue={s.shakeIntensity}
+            <input type="range" min={0} max={30} defaultValue={shakeIntensityRef.current}
               onChange={(e) => { shakeIntensityRef.current = Number(e.target.value); }} style={sliderStyle} />
           </div>
           <button onClick={() => actionsRef.current.shake()} style={{ ...btnStyle, fontSize: 9, padding: "3px 10px", width: "100%" }}>shake</button>
